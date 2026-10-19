@@ -1,0 +1,22 @@
+[Unit]
+Description=dbexplore - read-only PostgreSQL explorer
+Documentation=https://github.com/binwiederhier/dbexplore
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=dbexplore
+Group=dbexplore
+EnvironmentFile=-/etc/default/dbexplore
+ExecStart=/usr/bin/dbexplore -config /etc/dbexplore/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/etc/dbexplore
+
+[Install]
+WantedBy=multi-user.target

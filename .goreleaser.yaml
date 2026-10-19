@@ -1,0 +1,61 @@
+version: 2
+project_name: dbexplore
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - dbexplore.service
+
+nfpms:
+  - package_name: dbexplore
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
+    homepage: https://github.com/binwiederhier/dbexplore
+    maintainer: Philipp Heckel <phil@heckel.io>
+    description: A small, read-only, DataGrip-style explorer for PostgreSQL databases that runs in your browser.
+    license: Apache-2.0
+    section: database
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    contents:
+      - src: packaging/dbexplore.service
+        dst: /lib/systemd/system/dbexplore.service
+        file_info:
+          mode: 0644
+      - src: packaging/default
+        dst: /etc/default/dbexplore
+        type: config|noreplace
+        file_info:
+          mode: 0644
+      - dst: /etc/dbexplore
+        type: dir
+        file_info:
+          mode: 0700
+    scripts:
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+      postremove: packaging/postremove.sh
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  draft: true

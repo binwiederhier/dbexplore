@@ -1,0 +1,11 @@
+[Unit]
+Description=dbexplore - read-only PostgreSQL explorer
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/dbexplore
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

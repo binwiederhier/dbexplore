@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbexplore</title>
+<link rel="icon" href="favicon.svg">
+<style>
+:root{
+  --bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--line:#393b40;--text:#dfe1e5;--dim:#8c8f94;--accent:#3574f0;--sel:#2e436e;--hover:#33363b;
+  --null:#7a7e85;--num:#2aacb8;--str:#c9c9c9;--bool:#cf8e6d;--err:#f75464;--kw:#cf8e6d;--ok:#5fb865;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:13px/1.4 -apple-system,"Segoe UI",Inter,system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:transparent;border:1px solid transparent;border-radius:4px;padding:3px 7px;cursor:pointer;color:var(--text)}
+button:hover:not(:disabled){background:var(--hover)}
+button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{background:#4682f5}
+input,select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;outline:none}
+input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+#top{height:34px;display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+#top b{font-weight:600}
+#top .ro{font-size:11px;color:var(--bool);border:1px solid var(--bool);border-radius:3px;padding:0 5px}
+#main{flex:1;display:flex;min-height:0}
+#side{width:300px;min-width:180px;max-width:70vw;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line)}
+#side .hdr{display:flex;align-items:center;gap:4px;padding:6px 8px;border-bottom:1px solid var(--line)}
+#side .hdr span{flex:1;font-weight:600}
+#filter{margin:6px 8px;width:calc(100% - 16px)}
+#tree{flex:1;overflow:auto;padding-bottom:20px;user-select:none}
+.node{display:flex;align-items:center;gap:5px;height:24px;padding-right:8px;cursor:pointer;white-space:nowrap}
+.node:hover{background:var(--hover)}
+.node.sel{background:var(--sel)}
+.node .tw{width:14px;text-align:center;color:var(--dim);font-size:10px;flex:none}
+.node .ic{width:16px;flex:none;text-align:center}
+.node .nm{overflow:hidden;text-overflow:ellipsis}
+.node .ct{color:var(--dim);font-size:11px;margin-left:2px}
+.node .act{margin-left:auto;opacity:0;font-size:11px;padding:0 5px}
+.node:hover .act{opacity:1}
+#split{width:4px;cursor:col-resize;flex:none;background:transparent}
+#split:hover{background:var(--accent)}
+#work{flex:1;display:flex;flex-direction:column;min-width:0}
+#tabs{display:flex;height:32px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;flex:none}
+.tab{display:flex;align-items:center;gap:6px;padding:0 10px;border-right:1px solid var(--line);cursor:pointer;white-space:nowrap;color:var(--dim)}
+.tab.on{color:var(--text);background:var(--bg);box-shadow:inset 0 -2px 0 var(--accent)}
+.tab .x{opacity:.5;padding:0 3px;border-radius:3px}
+.tab .x:hover{opacity:1;background:var(--hover)}
+#pane{flex:1;display:flex;flex-direction:column;min-height:0}
+.empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--dim);flex-direction:column;gap:8px}
+.tb{display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+.tb .sep{width:1px;height:18px;background:var(--line);margin:0 4px}
+.tb .grow{flex:1}
+.filt{display:flex;border-bottom:1px solid var(--line);flex:none}
+.filt label{display:flex;align-items:center;flex:1;gap:6px;padding:0 8px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+.filt label+label{border-left:1px solid var(--line)}
+.filt input{flex:1;border:0;background:transparent;font-family:var(--mono);font-size:12px;padding:6px 0;color:var(--text)}
+.gridwrap{flex:1;overflow:auto;position:relative;min-height:0}
+table.grid{border-collapse:separate;border-spacing:0;font-family:var(--mono);font-size:12px}
+.grid th,.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:3px 8px;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.grid th{position:sticky;top:0;background:var(--panel);font-weight:500;cursor:pointer;z-index:1}
+.grid th:hover{background:var(--hover)}
+.grid th .ty{color:var(--dim);font-size:10px;margin-left:4px}
+.grid th .so{color:var(--accent);margin-left:4px}
+.grid th.rn,.grid td.rn{position:sticky;left:0;background:var(--panel2);color:var(--dim);text-align:right;min-width:40px;cursor:default}
+.grid th.rn{z-index:2}
+.grid tbody tr:hover td{background:#25272b}
+.grid tbody tr:hover td.rn{background:var(--panel2)}
+.grid{user-select:none}
+.grid tbody tr.rsel td{background:var(--sel)!important}
+.grid tbody tr.rsel td.rn{color:var(--text);box-shadow:inset 3px 0 0 var(--accent)}
+.grid td.sel{outline:1px solid var(--accent);outline-offset:-1px}
+.grid td.rn{cursor:pointer}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:2px 8px}
+.seg button.on{background:var(--sel);color:#fff}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px;padding:10px;user-select:none;align-items:start}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:6px;overflow:hidden;cursor:pointer}
+.card:hover{border-color:#4e5157}
+.card.rsel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.card .ch{display:flex;gap:6px;align-items:baseline;padding:5px 9px;background:var(--panel);border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px}
+.card .ch .no{color:var(--dim);font-size:11px}
+.card .ch .id{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card.rsel .ch{background:var(--sel)}
+.card table{width:100%;border-collapse:collapse;table-layout:fixed;font-family:var(--mono);font-size:11.5px}
+.card td{padding:2px 9px;border-bottom:1px solid #313338;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card tr:last-child td{border-bottom:0}
+.card td.k{color:var(--dim);width:40%}
+.card td.n{color:var(--null);font-style:italic}
+.card td.num{color:var(--num)}
+.card td.b{color:var(--bool)}
+.card td.j{color:#b6a5e0}
+.card .fk{color:#56a8f5;text-decoration:underline dotted;cursor:pointer}
+.grid td.n{color:var(--null);font-style:italic}
+.grid td.num{color:var(--num);text-align:right}
+.grid td.b{color:var(--bool)}
+.grid td.j{color:#b6a5e0}
+.grid .fk{color:#56a8f5;text-decoration:underline dotted;cursor:pointer}
+.grid .fk:hover{text-decoration:underline solid}
+.grid th .fkm{color:#56a8f5;margin-left:4px}
+.foot{display:flex;align-items:center;gap:10px;padding:4px 10px;border-top:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--dim);flex:none;min-height:30px}
+.foot .sql{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.pager{display:flex;align-items:center;gap:2px;color:var(--text)}
+.pager select{padding:1px 3px}
+.msg{padding:14px;font-family:var(--mono);font-size:12px;white-space:pre-wrap}
+.msg.err{color:var(--err)}
+.loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(30,31,34,.55);color:var(--dim);z-index:5}
+.spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp 0.8s linear infinite;margin-right:8px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.console{display:flex;flex-direction:column;flex:none;border-bottom:1px solid var(--line)}
+.ask{display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}
+.ask input{flex:1}
+.ask .grow{flex:1}
+.ask .lbl{color:#b6a5e0;font-weight:600;font-size:12px}
+.console textarea{height:150px;resize:vertical;border:0;border-radius:0;font-family:var(--mono);font-size:12.5px;padding:8px 10px;background:var(--bg);tab-size:2}
+#status{height:24px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--panel);border-top:1px solid var(--line);font-size:12px;color:var(--dim);flex:none}
+#status .cr{color:var(--dim)}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:50}
+#modal.on{display:flex}
+#modal .box{background:var(--panel);border:1px solid var(--line);border-radius:6px;width:min(900px,92vw);max-height:85vh;display:flex;flex-direction:column}
+#modal .mh{display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);gap:8px}
+#modal .mh span{flex:1;font-weight:600}
+#mBody{overflow:auto}
+#modal pre{margin:0;padding:12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-all}
+#modal .mh input{width:180px}
+.rowv{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px}
+.rowv td{border-bottom:1px solid var(--line);padding:5px 10px;vertical-align:top}
+.rowv td.k{color:var(--dim);white-space:nowrap;width:1%}
+.rowv td.k .ty{display:block;font-size:10px;opacity:.75}
+.rowv td.v{white-space:pre-wrap;word-break:break-all}
+.rowv td.v.n{color:var(--null);font-style:italic}
+.rowv td.v.num{color:var(--num)}
+.rowv td.v.b{color:var(--bool)}
+.rowv td.v.j{color:#b6a5e0}
+.rowv .fk{color:#56a8f5;text-decoration:underline dotted;cursor:pointer}
+.rowv tr:hover td{background:var(--hover)}
+#toast{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);padding:6px 14px;border-radius:5px;display:none;z-index:60}
+@media (max-width:700px){#side{width:42vw}}
+</style>
+</head>
+<body>
+<div id="top"><b>🗄 dbexplore</b><span class="ro">READ-ONLY</span><span style="color:var(--dim)">PostgreSQL</span><span style="flex:1"></span><button id="newConsole" title="New query console">＋ Query console</button></div>
+<div id="main">
+  <aside id="side">
+    <div class="hdr"><span>Database</span><button id="refreshTree" title="Refresh schema">⟳</button><button id="collapseAll" title="Collapse all">⊟</button></div>
+    <input id="filter" placeholder="Filter tables…" spellcheck="false">
+    <div id="tree"></div>
+  </aside>
+  <div id="split"></div>
+  <section id="work">
+    <div id="tabs"></div>
+    <div id="pane"></div>
+  </section>
+</div>
+<div id="status"><span id="crumbs">Ready</span></div>
+<div id="modal"><div class="box"><div class="mh"><span id="mTitle"></span><input id="mFilter" placeholder="Filter fields…" spellcheck="false"><button id="mPrev" title="Previous row (↑)">▲</button><button id="mNext" title="Next row (↓)">▼</button><button id="mCopy">Copy</button><button id="mClose">✕</button></div><div id="mBody"></div></div></div>
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
