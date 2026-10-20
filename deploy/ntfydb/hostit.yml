@@ -1,0 +1,5 @@
+# dbexplore as a hostit app, here ntfydb on apps.heckel.haus. "make deploy-hostit" builds the
+# binary locally and uploads it to bin/ with this file (and config.json on the first deploy).
+mode: app
+description: Read-only explorer for the ntfy.sh production database (read replica)
+run: ./bin/dbexplore -config config.json

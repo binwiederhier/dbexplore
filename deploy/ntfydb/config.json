@@ -1,0 +1,16 @@
+{
+  "listen": "0.0.0.0:${PORT}",
+  "sources": [
+    {
+      "id": "ntfy",
+      "name": "ntfy.sh (read replica)",
+      "dsn": "postgres://hostit@/ntfy?sslmode=require",
+      "hostit_connection": "ntfy-db"
+    }
+  ],
+  "max_rows": 1000,
+  "statement_timeout": "30s",
+  "ai": {
+    "context": "The database of ntfy.sh, a pub-sub push notification service. Tables: user (accounts, role, tier_id, Stripe fields), tier (plans and limits), user_access (topic ACL: user_id, topic pattern, read/write), user_token (API tokens), user_email/user_phone, message (cached messages per topic; time and expires are unix seconds), message_stats. The anonymous user is u_everyone."
+  }
+}

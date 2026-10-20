@@ -1,2 +1,5 @@
 dbexplore
 dist/
+/playground/
+/scripts/node_modules/
+/scripts/package-lock.json

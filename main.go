@@ -48,7 +48,7 @@ func main() {
 	static, _ := fs.Sub(webFS, "web")
 	mux := http.NewServeMux()
 	s.routes(mux, http.FileServerFS(static))
-	srv := &http.Server{Addr: cfg.Listen, Handler: s.auth(mux), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.listenAddr(), Handler: s.auth(mux), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -57,7 +57,11 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	slog.Info("listening", "addr", cfg.Listen, "config", *cfgPath, "sources", len(cfg.Sources), "ai", s.ai != nil, "version", version)
+	aiBackend := "off"
+	if s.ai != nil {
+		aiBackend = s.ai.backend.name()
+	}
+	slog.Info("listening", "addr", cfg.listenAddr(), "config", *cfgPath, "sources", len(cfg.Sources), "ai", aiBackend, "version", version)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)

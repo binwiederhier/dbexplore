@@ -19,14 +19,16 @@ const (
 )
 
 type sourceConfig struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	DSN  string `json:"dsn"` // postgres://user:pass@host:5432/db?sslmode=require, or key=value form
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	DSN              string `json:"dsn"`                         // postgres://user:pass@host:5432/db?sslmode=require, or key=value form
+	HostitConnection string `json:"hostit_connection,omitempty"` // password (and a missing host) from this hostit connection
+	ReadWrite        bool   `json:"read_write,omitempty"`
 }
 
 type aiConfig struct {
-	APIKey  string `json:"api_key,omitempty"` // falls back to $ANTHROPIC_API_KEY
-	Model   string `json:"model,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`  // falls back to $ANTHROPIC_API_KEY
+	Model   string `json:"model,omitempty"`    // Anthropic: defaults to defaultModel; hostit: its own default
 	BaseURL string `json:"base_url,omitempty"` // for an API gateway or proxy; defaults to Anthropic's API
 	Context string `json:"context,omitempty"`  // free text about the data, added to the prompt
 }
@@ -95,9 +97,6 @@ func loadConfig(path string) (*config, error) {
 		}
 		seen[s.ID] = true
 	}
-	if c.AI != nil && c.AI.Model == "" {
-		c.AI.Model = defaultModel
-	}
 	if !dirty {
 		return c, nil // never rewrite a complete config, it may be read-only or hand-formatted
 	}
@@ -137,4 +136,9 @@ func randomHex(n int) string {
 func defaultTimeoutDuration() time.Duration {
 	d, _ := time.ParseDuration(defaultTimeout)
 	return d
+}
+
+// listenAddr is Listen with environment variables expanded, e.g. "0.0.0.0:${PORT}" on hostit.
+func (c *config) listenAddr() string {
+	return os.ExpandEnv(c.Listen)
 }

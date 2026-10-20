@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"regexp"
 	"sort"
@@ -48,9 +50,19 @@ func (s *server) routes(mux *http.ServeMux, static http.Handler) {
 	mux.HandleFunc("POST /api/count", s.handleCount)
 	mux.HandleFunc("POST /api/query", s.handleQuery)
 	mux.HandleFunc("POST /api/assist", s.handleAssist)
+	mux.HandleFunc("POST /api/rows/{op}", s.handleRows)
 }
 
 // ---- auth ----
+
+// publicPaths are served without a session: the login page and the icons it (and Safari) loads.
+var publicPaths = map[string]bool{
+	"/login":                true,
+	"/login.html":           true,
+	"/favicon.svg":          true,
+	"/favicon.ico":          true,
+	"/apple-touch-icon.png": true,
+}
 
 func (s *server) sessionToken() string {
 	m := hmac.New(sha256.New, []byte(s.cfg.Secret))
@@ -60,7 +72,7 @@ func (s *server) sessionToken() string {
 
 func (s *server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.NoAuth || r.URL.Path == "/login" || r.URL.Path == "/login.html" || r.URL.Path == "/favicon.svg" {
+		if s.cfg.NoAuth || publicPaths[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -88,6 +100,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		MaxAge:   90 * 24 * 3600,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -96,9 +109,16 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 // ---- helpers ----
 
 func writeJSON(w http.ResponseWriter, v any) {
+	// Encode before writing anything, so a failure can still become an error response
+	data, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("cannot encode response", "error", err)
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("cannot encode response: %w", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(append(data, '\n'))
 }
 
 func writeErr(w http.ResponseWriter, code int, err error) {
@@ -137,8 +157,15 @@ func (s *server) cached(key string, fresh bool, load func() (any, error)) (any, 
 	return v, nil
 }
 
+// decode reads a JSON request body. It insists on the JSON content type, which a cross-site form
+// cannot send without a CORS preflight, so a page elsewhere cannot make the browser post queries.
 func decode(r *http.Request, v any) error {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct != "application/json" {
+		return userErrorf("invalid request: content type must be application/json")
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber() // keeps large keys exact in rows requests
+	if err := dec.Decode(v); err != nil {
 		return userErrorf("invalid request: %v", err)
 	}
 	return nil
@@ -158,15 +185,16 @@ func pageArgs(size, page, maxRows int) (int, int) {
 // ---- handlers ----
 
 type sourceInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"label"`
-	AI   bool   `json:"ai"`
+	ID        string `json:"id"`
+	Name      string `json:"label"`
+	AI        bool   `json:"ai"`
+	ReadWrite bool   `json:"read_write"`
 }
 
 func (s *server) handleSources(w http.ResponseWriter, r *http.Request) {
 	out := []sourceInfo{}
 	for _, src := range s.cfg.Sources {
-		out = append(out, sourceInfo{ID: src.ID, Name: src.Name, AI: s.ai != nil})
+		out = append(out, sourceInfo{ID: src.ID, Name: src.Name, AI: s.ai != nil, ReadWrite: src.ReadWrite})
 	}
 	writeJSON(w, out)
 }
@@ -231,13 +259,16 @@ type column struct {
 }
 
 func relName(r *http.Request) string {
-	return qi(r.FormValue("schema")) + "." + qi(r.FormValue("table"))
+	return qrel(r.FormValue("schema"), r.FormValue("table"))
 }
 
-func (s *server) columns(r *http.Request) ([]column, error) {
-	src, rel := r.FormValue("src"), relName(r)
+func qrel(schema, table string) string {
+	return qi(schema) + "." + qi(table)
+}
+
+func (s *server) columns(ctx context.Context, src, rel string) ([]column, error) {
 	v, err := s.cached("cols:"+src+":"+rel, false, func() (any, error) {
-		res, err := s.db.query(r.Context(), src, `
+		res, err := s.db.query(ctx, src, `
 			select a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
 			       coalesce((select true from pg_index i where i.indrelid = a.attrelid and i.indisprimary and a.attnum = any(i.indkey)), false)
 			from pg_attribute a
@@ -259,7 +290,7 @@ func (s *server) columns(r *http.Request) ([]column, error) {
 }
 
 func (s *server) handleColumns(w http.ResponseWriter, r *http.Request) {
-	cols, err := s.columns(r)
+	cols, err := s.columns(r.Context(), r.FormValue("src"), relName(r))
 	if err != nil {
 		fail(w, err)
 		return
@@ -307,36 +338,112 @@ func (s *server) handleFKs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, v)
 }
 
+// handleDDL reconstructs a relation's definition from the catalog: CREATE VIEW for views, and for
+// tables the columns (with defaults, identity and generated columns), constraints, partition key
+// and indexes. It is meant for reading, not for replaying like pg_dump output.
 func (s *server) handleDDL(w http.ResponseWriter, r *http.Request) {
-	cols, err := s.columns(r)
+	ddl, err := s.ddl(r)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	idx, err := s.db.query(r.Context(), r.FormValue("src"), "select indexdef from pg_indexes where schemaname = $1 and tablename = $2 order by indexname", 0, r.FormValue("schema"), r.FormValue("table"))
+	writeJSON(w, map[string]string{"ddl": ddl})
+}
+
+func (s *server) ddl(r *http.Request) (string, error) {
+	src, rel := r.FormValue("src"), relName(r)
+	ctx := r.Context()
+
+	// Relation kind, view definition and partition key
+	res, err := s.db.query(ctx, src, `
+		select c.relkind::text, coalesce(pg_get_viewdef(c.oid, true), ''), coalesce(pg_get_partkeydef(c.oid), '')
+		from pg_class c where c.oid = $1::regclass`, 0, rel)
 	if err != nil {
-		fail(w, err)
-		return
+		return "", err
 	}
-	var lines, pk []string
-	for _, c := range cols {
-		l := "  " + qi(c.Name) + " " + c.Type
-		if c.NotNull {
+	kind, viewDef, partKey := res.Rows[0][0].(string), res.Rows[0][1].(string), res.Rows[0][2].(string)
+	var b strings.Builder
+	switch kind {
+	case "v", "m":
+		create := "CREATE VIEW"
+		if kind == "m" {
+			create = "CREATE MATERIALIZED VIEW"
+		}
+		fmt.Fprintf(&b, "%s %s AS\n%s;\n", create, rel, strings.TrimSuffix(strings.TrimSpace(viewDef), ";"))
+	default:
+		lines, err := s.ddlColumns(r, src, rel)
+		if err != nil {
+			return "", err
+		}
+		cons, err := s.db.query(ctx, src, `
+			select conname, pg_get_constraintdef(oid, true) from pg_constraint
+			where conrelid = $1::regclass and contype in ('p', 'u', 'f', 'c', 'x')
+			order by case contype when 'p' then 0 when 'u' then 1 when 'f' then 2 else 3 end, conname`, 0, rel)
+		if err != nil {
+			return "", err
+		}
+		for _, row := range cons.Rows {
+			lines = append(lines, "  CONSTRAINT "+qi(row[0].(string))+" "+row[1].(string))
+		}
+		create := "CREATE TABLE"
+		if kind == "f" {
+			create = "CREATE FOREIGN TABLE"
+		}
+		fmt.Fprintf(&b, "%s %s (\n%s\n)", create, rel, strings.Join(lines, ",\n"))
+		if partKey != "" {
+			b.WriteString(" PARTITION BY " + partKey)
+		}
+		b.WriteString(";\n")
+	}
+
+	// Indexes, except the ones behind a primary key, unique or exclusion constraint shown above
+	idx, err := s.db.query(ctx, src, `
+		select pg_get_indexdef(i.indexrelid)
+		from pg_index i join pg_class ic on ic.oid = i.indexrelid
+		where i.indrelid = $1::regclass
+		  and not exists (select 1 from pg_constraint con where con.conrelid = i.indrelid and con.conindid = i.indexrelid and con.contype in ('p', 'u', 'x'))
+		order by ic.relname`, 0, rel)
+	if err != nil {
+		return "", err
+	}
+	for _, row := range idx.Rows {
+		b.WriteString(row[0].(string) + ";\n")
+	}
+	return b.String(), nil
+}
+
+// ddlColumns returns one line per column for CREATE TABLE.
+func (s *server) ddlColumns(r *http.Request, src, rel string) ([]string, error) {
+	res, err := s.db.query(r.Context(), src, `
+		select a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text
+		from pg_attribute a left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+		where a.attrelid = $1::regclass and a.attnum > 0 and not a.attisdropped
+		order by a.attnum`, 0, rel)
+	if err != nil {
+		return nil, err
+	}
+	lines := []string{}
+	for _, row := range res.Rows {
+		l := "  " + qi(row[0].(string)) + " " + row[1].(string)
+		expr, _ := row[3].(string)
+		switch identity, generated := row[4].(string), row[5].(string); {
+		case identity == "a":
+			l += " GENERATED ALWAYS AS IDENTITY"
+		case identity == "d":
+			l += " GENERATED BY DEFAULT AS IDENTITY"
+		case generated == "s":
+			l += " GENERATED ALWAYS AS (" + expr + ") STORED"
+		case generated == "v":
+			l += " GENERATED ALWAYS AS (" + expr + ") VIRTUAL"
+		case expr != "":
+			l += " DEFAULT " + expr
+		}
+		if row[2].(bool) {
 			l += " NOT NULL"
 		}
 		lines = append(lines, l)
-		if c.PK {
-			pk = append(pk, qi(c.Name))
-		}
 	}
-	if len(pk) > 0 {
-		lines = append(lines, "  PRIMARY KEY ("+strings.Join(pk, ", ")+")")
-	}
-	out := "CREATE TABLE " + relName(r) + " (\n" + strings.Join(lines, ",\n") + "\n);\n"
-	for _, row := range idx.Rows {
-		out += row[0].(string) + ";\n"
-	}
-	writeJSON(w, map[string]string{"ddl": out})
+	return lines, nil
 }
 
 type tableRequest struct {
@@ -429,26 +536,37 @@ func (s *server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sql := stripSQL(q.SQL)
+	src := s.cfg.source(q.Src)
+	readWrite := src != nil && src.ReadWrite
 	switch {
 	case sql == "":
 		fail(w, userErrorf("empty query"))
-	case pageableSQL.MatchString(sql):
+	case pageableSQL.MatchString(stripLeading(sql)):
 		// Wrapped so it pages; the newline ends a trailing -- comment in the user's SQL.
 		size, page := pageArgs(q.PageSize, q.Page, s.cfg.MaxRows)
 		res, err := s.paged(r, q.Src, "select * from ("+sql+"\n) q", size, page)
-		if err != nil {
+		if readWrite && needsWrite(err) {
+			s.writeQuery(w, r, q.Src, sql)
+			return
+		} else if err != nil {
 			fail(w, err)
 			return
 		}
 		writeJSON(w, res)
-	case readSQL.MatchString(sql):
+	case readSQL.MatchString(stripLeading(sql)):
 		res, err := s.db.query(r.Context(), q.Src, sql, 0)
-		if err != nil {
+		if readWrite && needsWrite(err) {
+			s.writeQuery(w, r, q.Src, sql)
+			return
+		} else if err != nil {
 			fail(w, err)
 			return
 		}
 		res.SQL = sql
+		res.Truncated, res.HasMore = res.HasMore, false
 		writeJSON(w, res)
+	case readWrite:
+		s.writeQuery(w, r, q.Src, sql)
 	default:
 		fail(w, userErrorf("only SELECT, WITH, VALUES, TABLE, EXPLAIN and SHOW statements are allowed"))
 	}
@@ -510,4 +628,39 @@ func (s *server) schemaSummary(r *http.Request, src string) (string, error) {
 		return "", err
 	}
 	return v.(string), nil
+}
+
+// stripLeading skips leading whitespace, comments and opening parentheses, so the statement filters
+// see the first keyword. An unterminated comment leaves nothing.
+func stripLeading(sql string) string {
+	for {
+		sql = strings.TrimLeft(sql, " \t\r\n(")
+		switch {
+		case strings.HasPrefix(sql, "--"):
+			i := strings.IndexByte(sql, '\n')
+			if i < 0 {
+				return ""
+			}
+			sql = sql[i+1:]
+		case strings.HasPrefix(sql, "/*"):
+			// Postgres block comments nest
+			depth, i := 0, 0
+			for ; i < len(sql); i++ {
+				if strings.HasPrefix(sql[i:], "/*") {
+					depth, i = depth+1, i+1
+				} else if strings.HasPrefix(sql[i:], "*/") {
+					depth, i = depth-1, i+1
+					if depth == 0 {
+						break
+					}
+				}
+			}
+			if depth > 0 {
+				return ""
+			}
+			sql = sql[i+1:]
+		default:
+			return sql
+		}
+	}
 }
