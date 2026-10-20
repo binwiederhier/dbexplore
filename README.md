@@ -16,7 +16,7 @@ It is a single Go binary. The frontend is embedded and written in plain JavaScri
   - Foreign key columns are links: hovering a value shows the referenced row in a card, clicking it opens the referenced table in a new tab, filtered to that row.
 - **Rows**:
   - Click, Shift+click, Ctrl+click or drag to select rows, Ctrl+A selects the page.
-  - Ctrl+C or ⧉ TSV copies the selection (or the page) as tab-separated values with a header line.
+  - Ctrl+C or ⧉ TSV copies the selection (or the page) as tab-separated values with a header line. After a plain click on a cell, Ctrl+C copies just that value.
   - Double-click a row to see every field, with JSON pretty-printed, and step through rows with the arrow keys.
   - Each tab can switch between a table view and a cards view.
 - **Query consoles**: free SQL with Ctrl+Enter, paged like a table. `SELECT`, `WITH`, `VALUES`, `TABLE`, `EXPLAIN` and `SHOW` are allowed.

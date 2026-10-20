@@ -241,7 +241,7 @@ async function runTab(t){
     }
   } catch(e){ t.error = e.message; t.res = null }
   if(t.res?.command) afterWrite(t.src, t.res.command);
-  t.loading = null; t.rsel = new Set(); t.anchor = null;
+  t.loading = null; t.rsel = new Set(); t.anchor = null; t.cell = null;
   if(t === active) renderGrid(t);
   saveTabs();
 }
@@ -265,7 +265,10 @@ $('#pane').addEventListener('click', async e => {
     else if(e.ctrlKey || e.metaKey){ t.rsel.has(ri) ? t.rsel.delete(ri) : t.rsel.add(ri); t.anchor = ri }
     else { t.rsel = new Set([ri]); t.anchor = ri }
     paintSel(t);
-    $('.grid td.sel')?.classList.remove('sel'); e.target.closest('td[data-r]')?.classList.add('sel');
+    // A plain click on a cell selects that cell too, and Ctrl+C then copies just its value
+    const td = !e.shiftKey && !e.ctrlKey && !e.metaKey && e.target.closest('td[data-r]');
+    t.cell = td ? {ri, ci:+td.dataset.c} : null;
+    $('#pane td.sel')?.classList.remove('sel'); if(td) td.classList.add('sel');
     return;
   }
   const b = e.target.closest('[data-a]'); if(!b) return;
@@ -310,6 +313,13 @@ $('#pane').addEventListener('mousedown', e => {
 });
 function paintSel(t){ document.querySelectorAll('#pane [data-ri]').forEach(tr => tr.classList.toggle('rsel', !!t.rsel?.has(+tr.dataset.ri))) }
 const tsvVal = v => v === null ? '' : cellText(v).replace(/[\t\r\n]+/g, ' ');
+// copyCellOrRows copies the selected cell's value if the selection is that one cell's row, else the rows.
+async function copyCellOrRows(t){
+  const c = t.cell;
+  if(!c || t.rsel.size !== 1 || !t.rsel.has(c.ri) || !t.res?.rows[c.ri]) return copyRows(t);
+  const v = t.res.rows[c.ri][c.ci];
+  try{ await navigator.clipboard.writeText(v === null ? '' : cellText(v)); toast('Copied value') }catch{ showModal('Value', cellText(v)) }
+}
 async function copyRows(t, idx){
   if(!t?.res) return;
   idx = idx || [...(t.rsel || [])].sort((a, b) => a - b);
@@ -446,7 +456,7 @@ async function deleteRow(){
   if(!confirm(`Delete this row from ${t.schema}.${t.table}? This cannot be undone.`)) return;
   try{
     await api('/api/rows/delete', {src:t.src, schema:t.schema, table:t.table, key:rowKey(t, ri)});
-    t.res.rows.splice(ri, 1); t.rsel = new Set(); t.count = null;
+    t.res.rows.splice(ri, 1); t.rsel = new Set(); t.cell = null; t.count = null;
     closeModal(); peek.cache.clear(); keepScroll(() => renderGrid(t)); toast('Row deleted');
   } catch(err){ toast(err.message) }
 }
@@ -492,7 +502,7 @@ document.addEventListener('keydown', e => {
   if(modal && rowView?.edit && e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); saveRow(); return }
   if(modal && rowView && !rowView.edit && !typing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')){ e.preventDefault(); (e.key === 'ArrowUp' ? $('#mPrev') : $('#mNext')).click() }
   if(!modal && !typing && active?.res && (e.ctrlKey || e.metaKey) && !e.altKey){
-    if(e.key === 'c' && active.rsel?.size && window.getSelection().isCollapsed){ e.preventDefault(); copyRows(active) }
+    if(e.key === 'c' && active.rsel?.size && window.getSelection().isCollapsed){ e.preventDefault(); copyCellOrRows(active) }
     if(e.key === 'a'){ e.preventDefault(); active.rsel = new Set(active.res.rows.map((_, i) => i)); paintSel(active) }
   }
   if(e.key === 'Enter' && (e.ctrlKey || e.metaKey) && active && !modal && !['sql', 'where', 'order', 'ask'].includes(e.target.dataset?.f)){ e.preventDefault(); if(active.kind === 'console') active.sql = $('[data-f="sql"]').value; reset(active) }

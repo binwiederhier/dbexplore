@@ -27,7 +27,7 @@ nfpms:
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
     homepage: https://github.com/binwiederhier/dbexplore
     maintainer: Philipp Heckel <phil@heckel.io>
-    description: A small, read-only, DataGrip-style explorer for PostgreSQL databases that runs in your browser.
+    description: A small, DataGrip-style explorer for PostgreSQL databases that runs in your browser.
     license: Apache-2.0
     section: database
     formats: [deb, rpm]
